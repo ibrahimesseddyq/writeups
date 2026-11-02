@@ -1,0 +1,45 @@
+# pythia
+
+**CTF:** GoogleCTF 2021  
+**Category:** crypto  
+**Original writeup:** <https://jsur.in/posts/2021-07-19-google-ctf-2021-crypto-writeups#pythia> — by **jsur.in**. All credit goes to the original author; this is an archived copy.
+
+---
+
+Pythia
+
+Yet another oracle, but the queries are costly and limited so be frugal with them. attachment pythia.2021.ctfcompetition.com 1337
+
+Upon connection, the server generates three random passwords, each consisting of exactly three lowercase letters. We are presented a menu where we can:
+
+Set key : Choose one of the three passwords for the server to use for the Decrypt text option Read flag : Prints the flag if we provide the three passwords Decrypt text : Uses a kdf to derive an AES key to decrypt and verify a given AESGCM nonce and ciphertext
+
+We are allowed to make 150 queries, and there is a 10 second delay between each one. To get the flag, we must recover all three passwords.
+
+An attack against this system is described here. The Decrypt text option acts as a partitioning oracle. We are able to compute valid AESGCM ciphertexts and tags that decrypt and verify under multiple keys. If we ask the oracle to attempt to decrypt and verify a ciphertext and tag that is valid under half of the possible key set, then we will have effectively halved the number of keys to consider. We can repeat this in a recursive manner to find the correct key in time logarithmic in the number of possible keys.
+
+Attack Details
+
+All operations are done in F 2 128 \mathbb{F}_{2^{128}} F2128​. For simplicity, we assume there is no additional data. The key idea is that, for any AES key K K K, ciphertext C 1 , … , C k − 1 C_1, \ldots, C_{k-1} C1​,…,Ck−1​, nonce N N N and tag T T T the following relation holds:
+
+T = C 1 ⋅ H k − 1 + ⋯ + C k − 1 ⋅ H 2 + L ⋅ H + E K ( N ∣ ∣ 0 31 1 ) T = C_1 \cdot H^{k-1} + \cdots + C_{k-1} \cdot H^2 +L \cdot H + E_{K}(N || 0^{31} 1) T = C 1 ​ ⋅ H k − 1 + ⋯ + C k − 1 ​ ⋅ H 2 + L ⋅ H + E K ​ ( N ∣∣ 0 31 1 )
+
+where L L L encodes the length of the ciphertext, and H = E K ( 0 128 ) H = E_K(0^{128}) H=EK​(0128).
+
+We want to find a ciphertext C 1 , … , C k C_1, \ldots, C_k C1​,…,Ck​ such that it decrypts and verifies under the set of keys K 1 , … , K k K_1, \ldots, K_k K1​,…,Kk​. We can fix T T T and N N N. Then, we have
+
+C k + C k − 1 ⋅ H i + ⋯ + C 1 ⋅ H i k − 1 = ( L ⋅ H i + E K i ( N ∣ ∣ 0 31 1 ) + T ) ⋅ H i − 2 C_k + C_{k-1} \cdot H_i + \cdots + C_1 \cdot H_i^{k-1} = (L \cdot H_i + E_{K_i}(N||0^{31}1) + T) \cdot H_i^{-2} C k ​ + C k − 1 ​ ⋅ H i ​ + ⋯ + C 1 ​ ⋅ H i k − 1 ​ = ( L ⋅ H i ​ + E K i ​ ​ ( N ∣∣ 0 31 1 ) + T ) ⋅ H i − 2 ​
+
+where again L L L encodes the length of the ciphertext, and H i = E K i ( 0 128 ) H_i = E_{K_i}(0^{128}) Hi​=EKi​​(0128).
+
+Noting that the left hand side of this is a degree k − 1 k-1 k−1 polynomial in H H H with coefficients C k , … , C 1 C_k, \ldots, C_1 Ck​,…,C1​, we can use polynomial interpolation techniques to recover the C k , … , C 1 C_k, \ldots, C_1 Ck​,…,C1​ given k k k points (i.e. k k k different keys).
+
+Implementation
+
+There are 2 6 3 = 17576 26^3 = 17576 263=17576 different possible passwords for each of the three passwords. Ideally, this would mean we can recover each password using around log ⁡ 2 ( 2 6 3 ) ≈ 14 \log_2(26^3) \approx 14 log2​(263)≈14 queries. However, this would require computing a ciphertext that decrypts and verifies under 17576 / 2 = 8788 17576/2 = 8788 17576/2=8788 different keys. My implementation was able to compute ciphertexts that decrypt under 1024 1024 1024 keys in around 2 minutes, and 512 512 512 keys in around 20 seconds. Because the server gives us 150 queries, this is all we need to solve it within the constraints. There are 17576 / 1024 ≈ 17 17576/1024 \approx 17 17576/1024≈17 "chunks" of 1024 keys, and once we determine which chunk the password belongs in, we can perform the recursive binary search to find the correct password in just 10 more queries. This means we will require at most 81 queries.
+
+To save time, we precomputed the 1024 1024 1024 chunks and 512 512 512 chunks and computed the rest on the fly.
+
+import os , time os . environ [ 'PWNLIB_NOTERM' ] = 'True' from Crypto . Cipher import AES from Crypto . Util . number import long_to_bytes , bytes_to_long from cryptography . hazmat . backends import default_backend from cryptography . hazmat . primitives . kdf . scrypt import Scrypt from string import ascii_lowercase from itertools import product from base64 import b64encode from pwn import remote , process , context from tqdm import tqdm ORDERED_PASSWORDS = [ ] POSSIBLE_KEYS = { } for a , b , c in product ( ascii_lowercase , repeat = 3 ) : kdf = Scrypt ( salt = b'' , length = 16 , n = 2 ** 4 , r = 8 , p = 1 , backend = default_backend ( ) ) key = kdf . derive ( bytes ( a + b + c , 'UTF-8' ) ) ORDERED_PASSWORDS . append ( a + b + c ) POSSIBLE_KEYS [ a + b + c ] = key NONCE = b'\x55' * 12 TAG = b'\x66' * 16 F2 . < x > = GF ( 2 ) [ ] p = x ^ 128 + x ^ 7 + x ^ 2 + x + 1 F = GF ( 2 ^ 128 , 'x' , modulus = p , impl = 'pari_ffelt' ) R . < z > = PolynomialRing ( F ) def block_aes ( block , key ) : return AES . new ( key , AES . MODE_CBC , iv = b'\x00' * 16 ) . encrypt ( block ) def bytes_to_F ( block ) : field_element = 0 for i in range ( 128 ) : if ( block [ i // 8 ] >> ( 7 - ( i % 8 ) ) ) & 1 == 1 : field_element += x ^ i return F ( field_element ) def F_to_bytes ( element ) : coeff = element . polynomial ( ) . coefficients ( sparse = False ) result = [ 0 for _ in range ( 16 ) ] for i in range ( len ( coeff ) ) : if coeff [ i ] == 1 : result [ i // 8 ] | = ( 1 << ( ( 7 - i ) % 8 ) ) return bytes ( result ) def attack ( keys , nonce , tag ) : L = bytes_to_F ( b'\x00' * 8 + long_to_bytes ( 128 * len ( keys ) , 8 ) ) N = nonce + b'\x00' * 3 + b'\x01' T = bytes_to_F ( tag ) interpolation_pts = [ ] for key in keys : H = bytes_to_F ( block_aes ( b'\x00' * 16 , key ) ) B = ( ( L * H ) + bytes_to_F ( block_aes ( N , key ) ) + T ) * H ^ - 2 interpolation_pts . append ( ( H , B ) ) start = time . time ( ) sol = R . lagrange_polynomial ( interpolation_pts ) t = time . time ( ) - start print ( f'polynomial interpolation took { t } s' ) C_blocks = [ F_to_bytes ( c ) for c in sol . coefficients ( sparse = False ) [ : : - 1 ] ] return b'' . join ( C_blocks ) def get_ciphertexts ( CHUNK_SIZE , outdir ) : key_chunks = [ ORDERED_PASSWORDS [ i : i + CHUNK_SIZE ] for i in range ( 0 , len ( ORDERED_PASSWORDS ) , CHUNK_SIZE ) ] s = sum ( len ( kc ) for kc in key_chunks ) if s < 26 ^ 3 : key_chunks += [ ORDERED_PASSWORDS [ s : ] ] i = 0 for keys in key_chunks : keys = [ POSSIBLE_KEYS [ pw ] for pw in keys ] import hashlib C = attack ( keys , NONCE , TAG ) print ( 'C: ' , hashlib . md5 ( C ) . hexdigest ( ) ) l = str ( i ) . zfill ( 5 ) open ( f' { outdir } / { l } .dat' , 'wb' ) . write ( C ) i += len ( keys ) aes = AES . new ( keys [ 0 ] , AES . MODE_GCM , nonce = NONCE ) aes . decrypt_and_verify ( C , TAG ) def oracle_decrypt ( C ) : conn . sendlineafter ( '>>> ' , '3' ) payload = b64encode ( NONCE ) + b',' + b64encode ( C + TAG ) conn . sendlineafter ( '>>> ' , payload ) conn . recvline ( ) res = conn . recvline ( ) . decode ( ) return 'success' in res def solve_pw_rec ( r ) : if r [ 1 ] - r [ 0 ] <= 1 : return list ( ORDERED_PASSWORDS ) [ r [ 0 ] ] r1 = ( r [ 0 ] , ( r [ 1 ] + r [ 0 ] ) // 2 ) r2 = ( ( r [ 1 ] + r [ 0 ] ) // 2 , r [ 1 ] ) OP = ORDERED_PASSWORDS [ r1 [ 0 ] : r1 [ 1 ] ] PK = [ POSSIBLE_KEYS [ pw ] for pw in OP ] C = attack ( PK , NONCE , TAG ) if oracle_decrypt ( C ) : return solve_pw_rec ( r1 ) else : return solve_pw_rec ( r2 ) def solve_pw ( idx , C1024 , C512 ) : conn . sendlineafter ( '>>> ' , '1' ) conn . sendlineafter ( '>>> ' , str ( idx ) ) LC1024 = list ( C1024 ) for r in LC1024 [ : - 1 ] : if oracle_decrypt ( C1024 [ r ] ) : break else : r = LC1024 [ - 1 ] possible_C = { } for s in C512 : if s [ 0 ] >= r [ 0 ] and s [ 1 ] <= r [ 1 ] : possible_C [ s ] = C512 [ s ] assert len ( possible_C ) == 2 r1 , r2 = possible_C if oracle_decrypt ( possible_C [ r1 ] ) : return solve_pw_rec ( r1 ) else : return solve_pw_rec ( r2 ) C1024 = { } for f in os . listdir ( './C1024' ) : l = int ( f . strip ( '.dat' ) ) r = ( l , min ( 26 ^ 3 , l + 1024 ) ) dat = open ( f'./C1024/ { f } ' , 'rb' ) . read ( ) C1024 [ r ] = dat C512 = { } for f in os . listdir ( './C512' ) : l = int ( f . strip ( '.dat' ) ) r = ( l , min ( 26 ^ 3 , l + 512 ) ) dat = open ( f'./C512/ { f } ' , 'rb' ) . read ( ) C512 [ r ] = dat conn = remote ( 'pythia.2021.ctfcompetition.com' , 1337 ) pw0 = solve_pw ( 0 , C1024 , C512 ) print ( 'pw0 recovered:' , pw0 ) pw1 = solve_pw ( 1 , C1024 , C512 ) print ( 'pw1 recovered:' , pw1 ) pw2 = solve_pw ( 2 , C1024 , C512 ) print ( 'pw2 recovered:' , pw2 ) pw = pw0 + pw1 + pw2 print ( 'password:' , pw ) conn . sendlineafter ( '>>> ' , '2' ) conn . sendlineafter ( '>>> ' , pw ) print ( conn . recvline ( ) . decode ( ) ) print ( conn . recvline ( ) . decode ( ) )
+
+Flag: CTF{gCm_1s_n0t_v3ry_r0bust_4nd_1_sh0uld_us3_s0m3th1ng_els3_h3r3}

